@@ -1,0 +1,34 @@
+# 密钥文件
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# BM25 缓存
+*.bm25.json
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# Claude Code
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 临时文件
+*.tmp
+*.log
+rag_raw_*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
