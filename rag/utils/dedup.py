@@ -26,3 +26,26 @@ def _simhash(text: str, bits: int = 64) -> int:
 def _hamming(a: int, b: int) -> int:
     """计算两个 SimHash 指纹的汉明距离。"""
     return (a ^ b).bit_count()
+
+
+def deduplicate(chunks: list[dict], threshold: int = 3) -> list[dict]:
+    """对检索结果列表进行 SimHash 去重。
+
+    Args:
+        chunks: [{"text": ..., "page": ..., ...}, ...] 格式的结果列表
+        threshold: 汉明距离阈值，默认 3（越小越严格）
+
+    Returns:
+        去重后的结果列表（保持原始顺序）
+    """
+    if not chunks:
+        return []
+    seen_fingerprints: list[int] = []
+    result: list[dict] = []
+    for chunk in chunks:
+        fp = _simhash(chunk["text"])
+        if any(_hamming(fp, existing) <= threshold for existing in seen_fingerprints):
+            continue
+        seen_fingerprints.append(fp)
+        result.append(chunk)
+    return result

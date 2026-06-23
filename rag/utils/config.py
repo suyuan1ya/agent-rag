@@ -1,5 +1,7 @@
 """环境变量加载 + Tesseract OCR 配置。"""
 
+from __future__ import annotations
+
 import os
 
 

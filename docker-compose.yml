@@ -36,7 +36,19 @@ services:
       - etcd
       - minio
 
+  app:
+    build: .
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - milvus
+    restart: unless-stopped
+
 volumes:
   etcd_data:
   minio_data:
   milvus_data:
+  app_data:
