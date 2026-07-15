@@ -4,7 +4,7 @@
 
 **自驱式 RAG 框架 — Agent 自主决策检索策略，告别被动管道式 RAG**
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/suyuan1ya/agent-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/suyuan1ya/agent-rag/actions)
 [![Ruff](https://img.shields.io/badge/Lint-Ruff-261230.svg)](https://github.com/astral-sh/ruff)
@@ -105,7 +105,7 @@ AgentRAG 是**主动的智能体**：
 
 ### 前置依赖
 
-- **Python** >= 3.9
+- **Python** >= 3.10
 - **LLM API Key**（任一 OpenAI 兼容服务）
 - Docker + Docker Compose（可选）
 

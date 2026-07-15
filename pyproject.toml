@@ -2,7 +2,7 @@
 name = "agent-rag"
 version = "0.3.0"
 description = "AgentRAG — 自驱式 RAG 框架，Agent 自主决策检索策略、自纠错，告别被动管道式 RAG"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "MIT" }
 keywords = ["rag", "agent", "react", "llm", "retrieval", "chromadb", "hybrid-search"]
@@ -10,7 +10,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -46,7 +45,7 @@ Repository = "https://github.com/suyuan1ya/agent-rag"
 agent-rag = "cli:app"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
