@@ -23,14 +23,14 @@ async def evaluate_with_ragas(
         {"faithfulness": float, "answer_relevancy": float, ...}
     """
     try:
+        from datasets import Dataset
         from ragas import evaluate as ragas_eval
         from ragas.metrics import (
-            faithfulness,
             answer_relevancy,
             context_precision,
             context_recall,
+            faithfulness,
         )
-        from datasets import Dataset
 
         data = {
             "question": questions,

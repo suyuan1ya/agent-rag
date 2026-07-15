@@ -54,10 +54,7 @@ class ConversationBuffer:
         """
         limit = (max_turns or self.max_turns) * 2
         recent = list(self._messages)[-limit:]
-        return [
-            {"role": role, "content": content}
-            for role, content, _ in recent
-        ]
+        return [{"role": role, "content": content} for role, content, _ in recent]
 
     def get_last_n_turns(self, n: int) -> list[dict]:
         """获取最近 n 轮对话。"""
@@ -66,7 +63,7 @@ class ConversationBuffer:
     def is_expired(self) -> bool:
         """检查对话是否因不活跃而过期。"""
         if self.ttl_seconds <= 0:
-            return False
+            return True
         return (time.time() - self._last_activity) > self.ttl_seconds
 
     def touch(self) -> None:
@@ -90,17 +87,11 @@ class ConversationBuffer:
         if not self._messages:
             return ""
 
-        history_text = "\n".join(
-            f"{role}: {content[:200]}"
-            for role, content, _ in self._messages
-        )
+        history_text = "\n".join(f"{role}: {content[:200]}" for role, content, _ in self._messages)
         if len(history_text) > 3000:
             history_text = history_text[-3000:]
 
-        prompt = (
-            "请用 2-3 句话总结以下对话的核心内容和用户关注点。只输出总结:\n\n"
-            f"{history_text}"
-        )
+        prompt = f"请用 2-3 句话总结以下对话的核心内容和用户关注点。只输出总结:\n\n{history_text}"
 
         try:
             return llm.chat_sync(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from openai import APIError, AsyncOpenAI, AuthenticationError
 
@@ -96,8 +96,10 @@ class LLMProvider:
                         "completion_tokens": response.usage.completion_tokens if response.usage else 0,
                     },
                 }
-            except AuthenticationError:
-                raise
+            except AuthenticationError as exc:
+                raise RuntimeError(
+                    "LLM API Key 无效或与当前接口不匹配，请检查 .env 配置"
+                ) from exc
             except Exception:
                 if attempt >= self.max_retries - 1:
                     raise
@@ -191,8 +193,10 @@ class LLMProvider:
                     temperature=temperature,
                 )
                 return response.choices[0].message.content
-            except AuthenticationError:
-                raise
+            except AuthenticationError as exc:
+                raise RuntimeError(
+                    "LLM API Key 无效或与当前接口不匹配，请检查 .env 配置"
+                ) from exc
             except APIError:
                 if attempt >= self.max_retries - 1:
                     raise

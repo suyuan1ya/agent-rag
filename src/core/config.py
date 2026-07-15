@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+__version__ = "0.3.0"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -18,9 +20,8 @@ class Settings(BaseSettings):
     llm_model: str = "qwen-plus"
     vl_model: str = "qwen-vl-plus"
 
-    # Milvus
-    milvus_host: str = "localhost"
-    milvus_port: int = 19530
+    # Vector Store
+    chroma_path: str = "./chroma_data"
     collection_name: str = "pdf_slices"
 
     # Embedding
@@ -40,13 +41,17 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
 
     # Agent
-    max_agent_iterations: int = 10
+    max_agent_iterations: int = 15
     conversation_max_turns: int = 20
     conversation_ttl: int = 3600
 
     # Server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    cors_origins: str = "http://localhost:3000,http://localhost:8000"
+    upload_max_bytes: int = 20 * 1024 * 1024
+    rate_limit_per_minute: int = 60
+    data_path: str = "./data"
 
     # Observability
     otel_enabled: bool = False

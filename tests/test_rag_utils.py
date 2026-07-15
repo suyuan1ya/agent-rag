@@ -1,16 +1,16 @@
-"""测试 rag/utils/ 中的工具函数（不需要 Milvus 连接）。"""
+"""测试 rag/utils/ 中的工具函数（不需要向量存储连接）。"""
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
-# 直接导入 util 模块（绕过 rag.__init__ 避免触发 pymilvus 依赖）
+# 直接导入 util 模块（绕过 rag.__init__ 避免触发 chromadb 依赖）
 _utils_dir = os.path.join(os.path.dirname(__file__), "..", "rag", "utils")
 sys.path.insert(0, os.path.abspath(_utils_dir))
 
 from dedup import deduplicate
-from filters import _is_reference_header, _is_noise_block, _is_new_section_header
+from filters import _is_new_section_header, _is_noise_block, _is_reference_header
 
 
 class TestDedup:

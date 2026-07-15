@@ -37,7 +37,7 @@ def create_query_tools(
             "required": ["question"],
         },
     )
-    def decompose_question(question: str) -> ToolResult:
+    async def decompose_question(question: str) -> ToolResult:
         prompt = (
             "将以下复杂问题拆解为 1-4 个可独立检索的子问题。"
             "每个子问题必须独立、可直接用于检索，不要有依赖关系。"
@@ -47,7 +47,7 @@ def create_query_tools(
         )
 
         try:
-            response = llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(
                 model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
@@ -89,7 +89,7 @@ def create_query_tools(
             "required": ["original_query"],
         },
     )
-    def rewrite_query(original_query: str, context: str = "") -> ToolResult:
+    async def rewrite_query(original_query: str, context: str = "") -> ToolResult:
         hint = ""
         if context:
             hint = f"\n之前的检索结果摘要: {context[:300]}"
@@ -105,7 +105,7 @@ def create_query_tools(
         )
 
         try:
-            response = llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(
                 model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
@@ -138,7 +138,7 @@ def create_query_tools(
             "required": ["question"],
         },
     )
-    def generate_hypothetical_answer(question: str) -> ToolResult:
+    async def generate_hypothetical_answer(question: str) -> ToolResult:
         prompt = (
             f"请针对以下问题，草拟一个假设性的学术回答（200-300字）。"
             f"不需要完全准确，只需写出你期望在论文中找到的那种回答风格和内容。\n\n"
@@ -147,7 +147,7 @@ def create_query_tools(
         )
 
         try:
-            response = llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(
                 model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,

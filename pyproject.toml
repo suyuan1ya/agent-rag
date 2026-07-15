@@ -2,33 +2,59 @@
 name = "agent-rag"
 version = "0.3.0"
 description = "AgentRAG — 自驱式 RAG 框架，Agent 自主决策检索策略、自纠错，告别被动管道式 RAG"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 readme = "README.md"
 license = { text = "MIT" }
-keywords = ["rag", "agent", "react", "llm", "retrieval", "milvus", "hybrid-search"]
+keywords = ["rag", "agent", "react", "llm", "retrieval", "chromadb", "hybrid-search"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
+dependencies = [
+    "numpy>=1.24.0,<2.0.0",
+    "scikit-learn>=1.5.0,<1.7.0",
+    "pandas>=2.2.0,<2.3.0",
+    "chromadb>=0.5.0",
+    "sentence-transformers>=3.0.0",
+    "openai>=1.30.0",
+    "PyMuPDF>=1.23.0",
+    "Pillow>=10.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "sse-starlette>=2.0.0",
+    "typer>=0.12.0",
+    "pydantic-settings>=2.2.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "ruff", "mypy"]
+observability = ["structlog>=24", "opentelemetry-api>=1.24", "opentelemetry-sdk>=1.24", "prometheus-client>=0.20"]
+evaluation = ["ragas>=0.2"]
 
 [project.urls]
-Homepage = "https://github.com/user/agent-rag"
-Documentation = "https://github.com/user/agent-rag#readme"
-Repository = "https://github.com/user/agent-rag"
+Homepage = "https://github.com/suyuan1ya/agent-rag"
+Documentation = "https://github.com/suyuan1ya/agent-rag#readme"
+Repository = "https://github.com/suyuan1ya/agent-rag"
 
 [project.scripts]
 agent-rag = "cli:app"
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py39"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -39,7 +65,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "unit: Unit tests",
-    "integration: Integration tests (require Milvus)",
+    "integration: Integration tests (require ChromaDB)",
     "slow: Slow tests",
 ]
 

@@ -1,74 +1,133 @@
-"""FastAPI 依赖注入 — Agent 单例管理、对话管理。"""
+"""In-process runtime registry with knowledge-base isolation."""
 
 from __future__ import annotations
 
+import threading
 import time
-from typing import TYPE_CHECKING
+from typing import Any
 
 from src.agent.memory.conversation import ConversationBuffer
-
-if TYPE_CHECKING:
-    from src.agent.agent import ResearchAgent
+from src.core.config import get_settings
 
 
-# 全局 Agent 实例（模块级单例，应用启动时由 lifespan 初始化）
-_agent: "ResearchAgent | None" = None
-_agent_pdf: str = ""
+class RuntimeRegistry:
+    def __init__(self) -> None:
+        self._agents: dict[str, Any] = {}
+        self._lock = threading.RLock()
+
+    def get(self, knowledge_base_id: str = "default") -> Any | None:
+        with self._lock:
+            return self._agents.get(knowledge_base_id)
+
+    def set(self, knowledge_base_id: str, agent: Any) -> None:
+        with self._lock:
+            previous = self._agents.get(knowledge_base_id)
+            self._agents[knowledge_base_id] = agent
+        if previous is not None and previous is not agent:
+            previous.close()
+
+    def values(self) -> list[Any]:
+        with self._lock:
+            return list(self._agents.values())
+
+    def clear(self) -> None:
+        with self._lock:
+            agents, self._agents = list(self._agents.values()), {}
+        for agent in agents:
+            agent.close()
 
 
 class ConversationManager:
-    """管理对话生命周期，支持 TTL 过期清理。"""
+    def __init__(self) -> None:
+        self._conversations: dict[tuple[str, str], ConversationBuffer] = {}
+        self._last_cleanup = time.time()
+        self._lock = threading.RLock()
 
-    def __init__(self):
-        self._conversations: dict[str, ConversationBuffer] = {}
-        self._last_cleanup: float = time.time()
-
-    def get_or_create(self, conversation_id: str) -> ConversationBuffer:
+    def get_or_create(
+        self, conversation_id: str, knowledge_base_id: str = "default"
+    ) -> ConversationBuffer:
         self._maybe_cleanup()
+        key = (knowledge_base_id, conversation_id)
+        settings = get_settings()
+        with self._lock:
+            conv = self._conversations.get(key)
+            if conv is None or conv.is_expired():
+                conv = ConversationBuffer(
+                    conversation_id=conversation_id,
+                    max_turns=settings.conversation_max_turns,
+                    ttl_seconds=settings.conversation_ttl,
+                )
+                self._conversations[key] = conv
+            else:
+                conv.touch()
+            return conv
 
-        if conversation_id not in self._conversations:
-            self._conversations[conversation_id] = ConversationBuffer(
-                conversation_id=conversation_id,
-                max_turns=20,
-                ttl_seconds=3600,
-            )
-            return self._conversations[conversation_id]
-
-        conv = self._conversations[conversation_id]
-        if conv.is_expired():
-            conv.clear()
-        else:
-            conv.touch()
-        return conv
-
-    def delete(self, conversation_id: str) -> None:
-        self._conversations.pop(conversation_id, None)
+    def delete(self, conversation_id: str, knowledge_base_id: str = "default") -> None:
+        with self._lock:
+            self._conversations.pop((knowledge_base_id, conversation_id), None)
 
     def _maybe_cleanup(self) -> None:
-        """每 5 分钟清理过期对话。"""
         now = time.time()
         if now - self._last_cleanup < 300:
             return
-        expired = [
-            cid for cid, conv in self._conversations.items()
-            if conv.is_expired()
-        ]
-        for cid in expired:
-            del self._conversations[cid]
-        self._last_cleanup = now
+        with self._lock:
+            expired = [key for key, conv in self._conversations.items() if conv.is_expired()]
+            for key in expired:
+                del self._conversations[key]
+            self._last_cleanup = now
 
 
-# 全局对话管理器
+runtime_registry = RuntimeRegistry()
 conversation_manager = ConversationManager()
+_restore_locks: dict[str, threading.Lock] = {}
+_restore_locks_guard = threading.RLock()
+
+# Backward-compatible aliases used by older callers/tests.
+_agent: Any | None = None
+_agent_pdf = ""
 
 
-def get_agent() -> "ResearchAgent | None":
-    """获取全局 Agent 实例。"""
-    return _agent
+def get_agent(knowledge_base_id: str = "default") -> Any | None:
+    return runtime_registry.get(knowledge_base_id)
 
 
-def set_agent(agent: "ResearchAgent", pdf: str = "") -> None:
-    """设置全局 Agent 实例（由 lifespan 调用）。"""
+def restore_agent(knowledge_base_id: str = "default") -> Any | None:
+    """Rebuild an in-memory agent from an existing persistent knowledge base."""
+    existing = runtime_registry.get(knowledge_base_id)
+    if existing is not None:
+        return existing
+
+    from src.core.runtime import (
+        create_agent,
+        create_engine,
+        normalize_knowledge_base_id,
+    )
+
+    knowledge_base_id = normalize_knowledge_base_id(knowledge_base_id)
+    with _restore_locks_guard:
+        restore_lock = _restore_locks.setdefault(knowledge_base_id, threading.Lock())
+
+    with restore_lock:
+        existing = runtime_registry.get(knowledge_base_id)
+        if existing is not None:
+            return existing
+
+        settings = get_settings()
+        engine = create_engine(knowledge_base_id, settings)
+        try:
+            if not engine.initialize(require_documents=True):
+                engine.close()
+                return None
+            agent = create_agent(engine, settings)
+            set_agent(agent, knowledge_base_id=knowledge_base_id)
+            return agent
+        except Exception:
+            engine.close()
+            raise
+
+
+def set_agent(agent: Any, pdf: str = "", knowledge_base_id: str = "default") -> None:
     global _agent, _agent_pdf
-    _agent = agent
-    _agent_pdf = pdf
+    runtime_registry.set(knowledge_base_id, agent)
+    if knowledge_base_id == "default":
+        _agent, _agent_pdf = agent, pdf

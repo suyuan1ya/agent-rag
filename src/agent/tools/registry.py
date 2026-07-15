@@ -1,4 +1,4 @@
-"""ToolRegistry — 工具注册、Schema 生成、执行调度。"""
+"""ToolRegistry — tool registration, schema generation, async dispatch."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ from .base import Tool, ToolResult, get_openai_tool_schema
 
 
 class ToolRegistry:
-    """管理 Agent 可用工具的注册和调度。
+    """Manages registration and dispatch of Agent tools.
 
-    提供:
-    - 工具注册（含去重）
-    - 生成 OpenAI 兼容的 tools 数组
-    - 按名称调度执行
+    Provides:
+    - Tool registration (with dedup)
+    - OpenAI-compatible tool schema generation
+    - Sync and async dispatch by name
     """
 
     def __init__(self):
@@ -33,14 +33,13 @@ class ToolRegistry:
         return list(self._tools.keys())
 
     def get_openai_schemas(self) -> list[dict]:
-        """生成 OpenAI function calling 兼容的工具列表。"""
+        """Generate OpenAI function calling compatible tool list."""
         return [get_openai_tool_schema(t) for t in self._tools.values()]
 
     def execute(self, name: str, arguments: dict) -> ToolResult:
-        """按名称调度工具执行。
+        """Synchronous tool dispatch.
 
-        Returns:
-            ToolResult: 始终返回 ToolResult，即使工具不存在也返回带 error 的结果。
+        Returns ToolResult even if the tool is not found (with error).
         """
         tool = self._tools.get(name)
         if tool is None:
@@ -49,6 +48,19 @@ class ToolRegistry:
                 error=f"未知工具 '{name}'。可用工具: {', '.join(self._tools.keys())}",
             )
         return tool(**arguments)
+
+    async def execute_async(self, name: str, arguments: dict) -> ToolResult:
+        """Async tool dispatch — uses acall() for all tools.
+
+        For sync-native tools, acall wraps them in asyncio.to_thread.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return ToolResult(
+                content="",
+                error=f"未知工具 '{name}'。可用工具: {', '.join(self._tools.keys())}",
+            )
+        return await tool.acall(**arguments)
 
     def __len__(self) -> int:
         return len(self._tools)

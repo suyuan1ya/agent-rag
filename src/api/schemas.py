@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., description="用户问题", min_length=1, max_length=5000)
     conversation_id: str | None = Field(None, description="对话 ID，不传则创建新对话")
     stream: bool = Field(True, description="是否使用 SSE 流式输出")
+    knowledge_base_id: str = Field("default", min_length=1, max_length=64)
 
 
 class Source(BaseModel):
@@ -28,6 +29,7 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     strategy: str = Field("hybrid", pattern="^(dense|keyword|hybrid)$")
     top_k: int = Field(5, ge=1, le=20)
+    knowledge_base_id: str = Field("default", min_length=1, max_length=64)
 
 
 class SearchResponse(BaseModel):
@@ -38,6 +40,7 @@ class SearchResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    version: str = "0.2.0"
-    milvus_connected: bool = False
+    version: str = "0.3.0"
+    vector_store_connected: bool = False
     model_loaded: bool = False
+    indexed_chunks: int = 0

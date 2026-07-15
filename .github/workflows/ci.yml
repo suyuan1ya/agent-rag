@@ -11,27 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: pip install ruff
-      - run: ruff check .
-
-  type-check:
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: pip install mypy -r requirements.txt
-      - run: mypy src/ rag/ tests/ cli.py
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff check .
 
   test:
     runs-on: ubuntu-latest
     needs: lint
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: pip install -r requirements.txt pytest pytest-cov
-      - run: pytest -v --cov=src --cov=rag --cov-report=term-missing
+      - uses: astral-sh/setup-uv@v6
+      - run: uv pip install --system -e ".[dev]"
+      - run: pytest -q

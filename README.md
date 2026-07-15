@@ -4,11 +4,10 @@
 
 **自驱式 RAG 框架 — Agent 自主决策检索策略，告别被动管道式 RAG**
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/user/agent-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/user/agent-rag/actions)
+[![CI](https://github.com/suyuan1ya/agent-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/suyuan1ya/agent-rag/actions)
 [![Ruff](https://img.shields.io/badge/Lint-Ruff-261230.svg)](https://github.com/astral-sh/ruff)
-[![Mypy](https://img.shields.io/badge/Type-Mypy-2B5B8C.svg)](https://mypy-lang.org)
 
 </div>
 
@@ -38,7 +37,7 @@ AgentRAG 是**主动的智能体**：
 ┌──────────────────────────────────────────────────┐
 │              混合检索引擎 (rag/)                   │
 │                                                  │
-│  Dense (BGE + Milvus COSINE)                     │
+│  Dense (BGE + ChromaDB COSINE)                     │
 │    + BM25 (本地 TF-IDF 索引)                      │
 │    → RRF 加权融合                                 │
 │    → CrossEncoder Reranker 精排                   │
@@ -71,12 +70,12 @@ AgentRAG 是**主动的智能体**：
 | 层级 | 技术选型 |
 |------|----------|
 | Agent 框架 | ReAct + Tool Registry + Event-Driven |
-| 向量检索 | Milvus 2.4 + BGE Embedding (bge-base-zh-v1.5) |
+| 向量检索 | ChromaDB (嵌入式) + BGE Embedding (bge-base-zh-v1.5) |
 | 关键词检索 | BM25 (k1=1.5, b=0.75) 自实现 + JSON 缓存 |
 | 精排 | CrossEncoder Reranker (bge-reranker-v2-m3) |
-| LLM | OpenAI 兼容 API (通义千问 Qwen) |
+| LLM | OpenAI 兼容 API（DeepSeek / 通义千问 / OpenAI） |
 | API 服务 | FastAPI + SSE Streaming + CORS |
-| 文档解析 | LangChain Unstructured + PyMuPDF + OCR |
+| 文档解析 | PyMuPDF（文字型 PDF） |
 | 可观测性 | Structlog + Prometheus + OpenTelemetry |
 | 工程化 | Docker / GitHub Actions CI / Pre-commit / Makefile |
 
@@ -106,14 +105,14 @@ AgentRAG 是**主动的智能体**：
 
 ### 前置依赖
 
-- **Python** >= 3.10
-- **Docker** + **Docker Compose**
-- **LLM API Key** (OpenAI 兼容，默认使用通义千问)
+- **Python** >= 3.9
+- **LLM API Key**（任一 OpenAI 兼容服务）
+- Docker + Docker Compose（可选）
 
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/user/agent-rag.git
+git clone https://github.com/suyuan1ya/agent-rag.git
 cd agent-rag
 ```
 
@@ -122,16 +121,21 @@ cd agent-rag
 ```bash
 cp .env.example .env
 # 编辑 .env，填入 DASHSCOPE_API_KEY
+pip install -e ".[dev]"
 ```
 
-### 3. 一键启动
+### 3. 启动网页工作台
 
 ```bash
-# 启动完整服务栈 (Milvus + API Server)
-docker-compose up -d
+python cli.py serve
+# 浏览器访问 http://localhost:8000
 ```
 
-### 4. 入库文档
+也可以使用 `docker-compose up -d` 启动容器版本。
+
+### 4. 导入文档
+
+推荐直接在网页中选择知识库并上传 PDF。也可以使用 CLI：
 
 ```bash
 # 可多次执行，入库多个文档到同一知识库
@@ -161,7 +165,10 @@ Agent 会自主：
 # 启动 API 服务
 python cli.py serve
 
-# Swagger 文档
+# 网页工作台
+open http://localhost:8000
+
+# Swagger API 文档
 open http://localhost:8000/docs
 
 # 健康检查
@@ -202,11 +209,12 @@ python cli.py evaluate --pdf docs/paper.pdf --output report.json
 ```
 agent-rag/
 ├── rag/                        # 核心检索引擎
-│   ├── rag_system.py           # RAGSystem (Milvus/Embedding/BM25/Reranker)
+│   ├── rag_system.py           # RAGSystem (ChromaDB / Embedding / BM25 / Reranker)
 │   └── utils/                  # 配置、去重、过滤、坐标
 ├── src/
 │   ├── agent/                  # AgentRAG 智能体
-│   │   ├── agent.py            # ReAct Agent 主循环 + 事件系统
+│   │   ├── orchestrator.py     # Agent 编排、检索与答案生成
+│   │   ├── fsm.py              # 有限状态机与合法状态迁移
 │   │   ├── llm.py              # LLM Provider (重试/流式)
 │   │   ├── tools/              # 8 个工具 (检索/变换/反思)
 │   │   ├── memory/             # 对话记忆 + 工作记忆
@@ -214,6 +222,8 @@ agent-rag/
 │   ├── api/                    # FastAPI 服务
 │   │   ├── app.py              # 应用工厂 + 生命周期
 │   │   └── routes/             # chat/search/documents/health
+│   ├── infrastructure/rag/     # ChromaDB、BM25 与混合检索
+│   ├── web/                    # PDF 上传与问答工作台
 │   ├── evaluation/             # 评估体系
 │   │   ├── benchmark.py        # 端到端 Benchmark
 │   │   ├── judge.py            # LLM-as-Judge
@@ -228,7 +238,7 @@ agent-rag/
 ├── tests/                      # 测试
 ├── cli.py                      # 统一 CLI 入口
 ├── Dockerfile                  # 应用容器化
-├── docker-compose.yml          # 一键部署 (Milvus + MinIO + App)
+├── docker-compose.yml          # Docker 部署
 ├── Makefile                    # 标准化命令
 ├── .github/workflows/ci.yml    # CI/CD Pipeline
 ├── .pre-commit-config.yaml     # Pre-commit Hooks
@@ -237,13 +247,15 @@ agent-rag/
 
 ## 工程亮点
 
-- **BM25 本地索引**：JSON 缓存，不依赖 Milvus 读取，重启不丢失
+- **BM25 本地索引**：JSON 缓存，独立于向量存储，重启不丢失
 - **Reranker 延迟加载**：入库时只加载 Embedding (~200MB)，检索时才加载 Reranker (~2GB)，内存峰值可控
 - **GPU FP16 量化**：自动检测 CUDA，Embedding 模型半精度
 - **大文件流式处理**：PDF 写入临时 JSONL 过滤，避免全量驻留内存
 - **智能分块**：按自然句边界截断（段落 > 句号 > 分号 > 空格），保护专业术语完整性
-- **多层降级**：Milvus 异常分层捕获，LLM 调用指数退避重试 (3次)
+- **多层降级**：向量存储异常分层捕获，LLM 调用指数退避重试 (3次)
 - **事件驱动架构**：Agent 每个动作通过类型化事件通知调用方
+- **知识库自动恢复**：服务重启后从 ChromaDB 与 BM25 缓存恢复，无需重复上传
+- **本地模型优先**：Embedding 与 Reranker 优先使用 Hugging Face 本地快照
 
 ## 常用命令
 
@@ -269,9 +281,27 @@ make clean        # 清理临时文件
 | `DASHSCOPE_API_KEY` | LLM API Key | — |
 | `LLM_BASE_URL` | LLM API 地址 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `LLM_MODEL` | 模型名称 | `qwen-plus` |
-| `MILVUS_HOST` | Milvus 地址 | `localhost` |
-| `MILVUS_PORT` | Milvus 端口 | `19530` |
+| `CHROMA_PATH` | ChromaDB 数据路径 | `./chroma_data` |
+| `DATA_PATH` | BM25 和运行数据路径 | `./data` |
 
 ## License
 
 MIT
+
+## 多知识库 API
+
+API 以 `knowledge_base_id` 隔离索引、Agent 和对话。上传文档时使用 multipart 字段，
+聊天和检索时在 JSON 请求中传入相同的知识库 ID：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/upload \
+  -F "file=@docs/contract.pdf" \
+  -F "knowledge_base_id=contracts"
+
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"违约责任是什么？","knowledge_base_id":"contracts"}'
+```
+
+上传大小、CORS 来源和请求速率分别由 `UPLOAD_MAX_BYTES`、`CORS_ORIGINS`、
+`RATE_LIMIT_PER_MINUTE` 配置。生产部署仍应在网关层配置身份认证和持久化任务队列。

@@ -28,6 +28,13 @@ env/
 *.tmp
 *.log
 rag_raw_*.jsonl
+chroma_data/
+data/
+reports/
+.serve-test.*
+1.txt
+=0.5.0
+run.ps1
 
 # OS
 .DS_Store

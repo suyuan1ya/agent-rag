@@ -1,11 +1,6 @@
 FROM python:3.11-slim
 
-LABEL description="RAG Research Agent — ReAct Agent 学术论文智能问答系统"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr \
-    tesseract-ocr-chi-sim \
-    && rm -rf /var/lib/apt/lists/*
+LABEL description="AgentRAG — Agentic document analysis with hybrid retrieval"
 
 WORKDIR /app
 

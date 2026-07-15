@@ -2,29 +2,38 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 
-from src.api.dependencies import get_agent
+from src.api.dependencies import get_agent, restore_agent
 from src.api.schemas import HealthResponse
+from src.core.config import __version__
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health():
-    agent = get_agent()
+async def health(knowledge_base_id: str = "default"):
+    agent = get_agent(knowledge_base_id)
+    if agent is None:
+        agent = await asyncio.to_thread(restore_agent, knowledge_base_id)
     if agent is None:
         return HealthResponse(
             status="no_document",
-            milvus_connected=False,
+            vector_store_connected=False,
             model_loaded=False,
+            version=__version__,
         )
 
     rag = agent.rag
+    status = rag.degradation_status
     return HealthResponse(
         status="ready",
-        milvus_connected=rag.collection is not None,
-        model_loaded=rag.embed_model is not None,
+        version=__version__,
+        vector_store_connected=status["vector_docs"] >= 0,
+        model_loaded=getattr(rag.embedding, "_model", None) is not None,
+        indexed_chunks=status["vector_docs"],
     )
 
 

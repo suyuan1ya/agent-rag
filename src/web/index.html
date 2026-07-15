@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AgentRAG — 可追溯的智能文档问答工作台" />
+    <title>AgentRAG · 智能文档工作台</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260715-2" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="AgentRAG 首页">
+          <span class="brand-mark">AR</span>
+          <span>
+            <strong>AgentRAG</strong>
+            <small>Document Intelligence</small>
+          </span>
+        </a>
+        <div class="system-state" id="systemState">
+          <span class="state-dot"></span>
+          <span id="systemStateText">等待文档</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">AGENTIC RETRIEVAL WORKSPACE</p>
+          <h1>让每一份文档，<br /><span>都能给出有依据的答案。</span></h1>
+          <p class="hero-copy">
+            上传 PDF，Agent 会自主选择混合检索策略、评估证据充分性，并给出可追溯到页码的回答。
+          </p>
+        </div>
+        <div class="capabilities" aria-label="系统能力">
+          <div><strong>3</strong><span>检索策略</span></div>
+          <div><strong>RRF</strong><span>融合排序</span></div>
+          <div><strong>FSM</strong><span>推理编排</span></div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="control-panel">
+          <div class="panel-heading">
+            <span class="step-number">01</span>
+            <div><h2>知识库</h2><p>已有索引自动恢复，也可导入新 PDF</p></div>
+          </div>
+
+          <label class="field-label" for="knowledgeBase">知识库标识</label>
+          <div class="input-wrap">
+            <span>#</span>
+              <input id="knowledgeBase" value="demo_v2" maxlength="64" autocomplete="off" />
+          </div>
+
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 PDF">
+            <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden />
+            <div class="upload-icon">↑</div>
+            <strong id="dropTitle">上传或更换 PDF</strong>
+            <p id="dropCopy">可选操作 · 最大 20 MB</p>
+            <button class="secondary-button" id="selectFile" type="button">选择新文件</button>
+          </div>
+
+          <div class="upload-progress hidden" id="uploadProgress" aria-live="polite">
+            <div class="progress-copy">
+              <span id="progressLabel">正在上传</span><strong id="progressValue">0%</strong>
+            </div>
+            <div class="progress-track"><span id="progressBar"></span></div>
+            <p id="processingDetail">正在准备文档...</p>
+          </div>
+
+          <div class="document-card hidden" id="documentCard">
+            <div class="pdf-badge">PDF</div>
+            <div class="document-info">
+              <strong id="documentName"></strong>
+              <span id="documentMeta">已完成索引</span>
+            </div>
+            <span class="check">✓</span>
+          </div>
+
+          <div class="pipeline">
+            <p class="field-label">检索流水线</p>
+            <div class="pipeline-row">
+              <span>Dense</span><i></i><span>BM25</span><i></i><span>Rerank</span>
+            </div>
+          </div>
+        </aside>
+
+        <section class="chat-panel">
+          <div class="chat-header">
+            <div class="panel-heading compact">
+              <span class="step-number">02</span>
+              <div><h2>询问文档</h2><p id="chatSubtitle">正在检查本地知识库...</p></div>
+            </div>
+            <button class="icon-button" id="clearChat" title="清空对话" aria-label="清空对话">↻</button>
+          </div>
+
+          <div class="messages" id="messages" aria-live="polite">
+            <div class="empty-state" id="emptyState">
+              <div class="orb"><span></span></div>
+              <h3>你的文档助手已待命</h3>
+              <p>已有知识库可直接提问；上传区域仅用于导入或更换文档。</p>
+              <div class="suggestions">
+                <button type="button">总结这份文档的核心内容</button>
+                <button type="button">找出可能存在的风险条款</button>
+                <button type="button">列出关键日期和金额</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <textarea id="question" rows="1" maxlength="5000" placeholder="正在检查本地知识库..." disabled></textarea>
+            <button id="sendButton" class="send-button" type="button" disabled aria-label="发送问题">↑</button>
+            <div class="composer-meta"><span>Enter 发送 · Shift + Enter 换行</span><span id="charCount">0 / 5000</span></div>
+          </div>
+        </section>
+      </section>
+
+      <footer>
+        <span>AgentRAG v0.3</span>
+        <span>Dense + BM25 + RRF + CrossEncoder</span>
+      </footer>
+    </main>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="/static/app.js?v=20260715-3" defer></script>
+  </body>
+</html>

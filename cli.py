@@ -12,6 +12,13 @@ from __future__ import annotations
 import asyncio
 import sys
 import traceback
+from typing import Optional
+
+# 修复 Windows GBK 终端下的 emoji 打印问题
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 import typer
 
@@ -29,6 +36,7 @@ def serve(
 ):
     """启动 FastAPI 服务器。"""
     import uvicorn
+
     typer.echo(f"Starting RAG Agent API on http://{host}:{port}")
     uvicorn.run(
         "src.api.app:create_app",
@@ -42,26 +50,26 @@ def serve(
 @app.command()
 def chat(
     pdf: str = typer.Option(..., help="PDF 文件路径"),
-    query: str | None = typer.Option(None, help="单次提问（不指定则进入交互模式）"),
-    max_iterations: int = typer.Option(10, help="Agent 最大迭代次数"),
+    query: Optional[str] = typer.Option(None, help="单次提问（不指定则进入交互模式）"),
+    max_iterations: int = typer.Option(15, help="Agent 最大迭代次数"),
 ):
     """启动交互式 Agent 对话（自驱式 RAG 模式）。"""
-    from rag import RAGSystem
-    from src.agent.agent import ResearchAgent, TokenEvent, ToolCallEvent, ToolResultEvent, DoneEvent
+    from src.agent.orchestrator import DoneEvent, TokenEvent, ToolCallEvent, ToolResultEvent
+    from src.core.config import get_settings
+    from src.core.runtime import create_agent, create_engine
 
-    rag = RAGSystem(pdf_path=pdf)
-    agent = ResearchAgent(rag, max_iterations=max_iterations)
+    settings = get_settings()
+    rag = create_engine("cli", settings)
 
     try:
         typer.echo("Initializing...")
-        rag.setup_milvus()
-        rag.setup_models()
-        rag.ingest_pdf()
-        agent.initialize()
+        rag.initialize()
+        asyncio.run(rag.ingest(pdf))
+        agent = create_agent(rag, settings)
     except Exception:
         typer.echo("❌ 初始化失败:")
         traceback.print_exc()
-        agent.close()
+        rag.close()
         raise typer.Exit(code=1)
 
     async def run_query(q: str):
@@ -69,21 +77,22 @@ def chat(
         typer.echo(f"🤔 {q}")
         typer.echo(f"{'=' * 60}\n")
 
-        async for event in agent.chat(q):
-            match event:
-                case ToolCallEvent(tool_name=t, arguments=a):
-                    typer.echo(f"  🔧 {t}({a})")
-                case ToolResultEvent(tool_name=t, result=r):
-                    if r.success:
-                        typer.echo(f"  ✅ {t}: {r.metadata.get('count', 0)} results")
-                    else:
-                        typer.echo(f"  ❌ {t}: {r.error}")
-                case TokenEvent(token=tok):
-                    typer.echo(tok, nl=False)
-                case DoneEvent(final_answer=ans):
-                    typer.echo(f"\n\n{'=' * 60}")
-                    typer.echo(ans)
-                    typer.echo(f"{'=' * 60}")
+        async for event in agent.run(q):
+            if isinstance(event, ToolCallEvent):
+                typer.echo(f"  🔧 {event.tool_name}({event.arguments})")
+            elif isinstance(event, ToolResultEvent):
+                if event.result.success:
+                    typer.echo(
+                        f"  ✅ {event.tool_name}: {event.result.metadata.get('count', 0)} results"
+                    )
+                else:
+                    typer.echo(f"  ❌ {event.tool_name}: {event.result.error}")
+            elif isinstance(event, TokenEvent):
+                typer.echo(event.token, nl=False)
+            elif isinstance(event, DoneEvent):
+                typer.echo(f"\n\n{'=' * 60}")
+                typer.echo(event.final_answer)
+                typer.echo(f"{'=' * 60}")
 
     if query:
         asyncio.run(run_query(query))
@@ -112,17 +121,15 @@ def chat(
 def ingest(
     pdf: str = typer.Option(..., help="PDF 文件路径"),
 ):
-    """将 PDF 入库到 Milvus（不启动对话）。"""
-    from rag import RAGSystem
+    """将 PDF 入库到 ChromaDB（不启动对话）。"""
+    from src.core.runtime import create_engine
 
-    rag = RAGSystem(pdf_path=pdf)
+    rag = create_engine("default")
     try:
-        typer.echo("Connecting to Milvus...")
-        rag.setup_milvus()
-        typer.echo("Loading models...")
-        rag.setup_models()
+        typer.echo("Initializing vector store...")
+        rag.initialize()
         typer.echo("Ingesting PDF...")
-        rag.ingest_pdf()
+        asyncio.run(rag.ingest(pdf))
         typer.echo("✅ Ingestion complete.")
     except Exception:
         typer.echo("❌ Ingestion failed:")
@@ -138,17 +145,16 @@ def evaluate(
     num: int = typer.Option(30, help="测试问题数量"),
     compare: bool = typer.Option(False, help="对比所有检索策略"),
     seed: int = typer.Option(42, help="随机种子"),
-    output: str | None = typer.Option(None, help="JSON 输出路径"),
+    output: Optional[str] = typer.Option(None, help="JSON 输出路径"),
 ):
     """运行检索质量评估。"""
-    from rag import RAGSystem
-    from src.evaluation.metrics import generate_questions, compute_metrics, print_metrics
+    from src.core.runtime import create_engine
+    from src.evaluation.metrics import compute_metrics, generate_questions, print_metrics
 
-    rag = RAGSystem(pdf_path=pdf)
+    rag = create_engine("evaluation")
     try:
-        rag.setup_milvus()
-        rag.setup_models()
-        rag.ingest_pdf()
+        rag.initialize()
+        asyncio.run(rag.ingest(pdf))
         chunks = rag.get_chunks()
         if len(chunks) < num:
             typer.echo(f"Warning: only {len(chunks)} chunks available (requested {num})")
@@ -160,18 +166,23 @@ def evaluate(
 
         if compare:
             for strategy, search_fn in [
-                ("dense", rag.search_similar),
+                ("dense", lambda q, top_k=5: asyncio.run(rag.dense_search(q, top_k))),
                 ("keyword", rag.keyword_search),
-                ("hybrid", rag.hybrid_search),
+                ("hybrid", lambda q, top_k=5: asyncio.run(rag.hybrid_search(q, top_k))),
             ]:
                 metrics = compute_metrics(test_cases, search_fn, top_k=5)
                 print_metrics(strategy.upper(), metrics)
         else:
-            metrics = compute_metrics(test_cases, rag.hybrid_search, top_k=5)
+            metrics = compute_metrics(
+                test_cases,
+                lambda q, top_k=5: asyncio.run(rag.hybrid_search(q, top_k)),
+                top_k=5,
+            )
             print_metrics("HYBRID", metrics)
 
         if output:
             import json
+
             with open(output, "w", encoding="utf-8") as f:
                 json.dump(metrics, f, ensure_ascii=False, indent=2)
             typer.echo(f"\nResults saved to {output}")

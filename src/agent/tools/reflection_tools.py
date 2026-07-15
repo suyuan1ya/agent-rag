@@ -42,7 +42,7 @@ def create_reflection_tools(
             "required": ["question", "results_summary"],
         },
     )
-    def evaluate_sufficiency(question: str, results_summary: str) -> ToolResult:
+    async def evaluate_sufficiency(question: str, results_summary: str) -> ToolResult:
         prompt = (
             "评估检索结果是否足以回答用户问题。\n\n"
             f"用户问题: {question}\n\n"
@@ -55,7 +55,7 @@ def create_reflection_tools(
         )
 
         try:
-            response = llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(
                 model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -99,7 +99,7 @@ def create_reflection_tools(
             "required": ["claim", "source_texts"],
         },
     )
-    def verify_citation(claim: str, source_texts: str) -> ToolResult:
+    async def verify_citation(claim: str, source_texts: str) -> ToolResult:
         prompt = (
             "验证以下陈述是否有提供的原文支持。\n\n"
             f"陈述: {claim}\n\n"
@@ -112,7 +112,7 @@ def create_reflection_tools(
         )
 
         try:
-            response = llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(
                 model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

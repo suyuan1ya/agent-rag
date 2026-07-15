@@ -26,7 +26,6 @@ async def run_benchmark(
         评估报告字典
     """
     from src.evaluation.ragas_eval import evaluate_with_ragas
-    from src.evaluation.judge import judge_answer_quality
 
     report: dict[str, Any] = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),

@@ -18,57 +18,67 @@ import asyncio
 import json
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import AsyncIterator, Union
 
 from .llm import LLMProvider
-from .tools.base import Tool, ToolResult
-from .tools.registry import ToolRegistry
-from .tools.search_tools import create_search_tools
-from .tools.query_tools import create_query_tools
-from .tools.reflection_tools import create_reflection_tools
 from .memory.conversation import ConversationBuffer
 from .memory.working import WorkingMemory
 from .prompts.system import SYSTEM_PROMPT_TEMPLATE
-
+from .tools.base import ToolResult
+from .tools.query_tools import create_query_tools
+from .tools.reflection_tools import create_reflection_tools
+from .tools.registry import ToolRegistry
+from .tools.search_tools import create_search_tools
 
 # ==================== Agent 事件类型 ====================
+
 
 @dataclass
 class ThinkingEvent:
     """Agent 正在思考/规划。"""
+
     content: str
+
 
 @dataclass
 class ToolCallEvent:
     """Agent 决定调用工具。"""
+
     tool_name: str
     arguments: dict
     call_id: str = ""
 
+
 @dataclass
 class ToolResultEvent:
     """工具执行完成。"""
+
     tool_name: str
     result: ToolResult
+
 
 @dataclass
 class TokenEvent:
     """LLM 输出的文本 token（流式）。"""
+
     token: str
+
 
 @dataclass
 class DoneEvent:
     """Agent 完成本轮推理。"""
+
     final_answer: str
     sources: list[dict] = field(default_factory=list)
     tool_calls_made: int = 0
     total_tokens: int = 0
 
 
-AgentEvent = ThinkingEvent | ToolCallEvent | ToolResultEvent | TokenEvent | DoneEvent
+AgentEvent = Union[ThinkingEvent, ToolCallEvent, ToolResultEvent, TokenEvent, DoneEvent]
 
 
 # ==================== Research Agent ====================
+
 
 class ResearchAgent:
     """AgentRAG 自驱式检索 Agent。
@@ -93,7 +103,7 @@ class ResearchAgent:
     def __init__(
         self,
         rag_system,  # RAGSystem 实例
-        max_iterations: int = 10,
+        max_iterations: int = 15,
     ):
         self.rag = rag_system
         self.max_iterations = max_iterations
@@ -197,21 +207,23 @@ class ResearchAgent:
             tool_calls = response.get("tool_calls")
             if tool_calls:
                 # 将 assistant 消息加入历史
-                messages.append({
-                    "role": "assistant",
-                    "content": response.get("content"),
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["function"]["name"],
-                                "arguments": tc["function"]["arguments"],
-                            },
-                        }
-                        for tc in tool_calls
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response.get("content"),
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["function"]["name"],
+                                    "arguments": tc["function"]["arguments"],
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                )
 
                 # 执行每个工具调用
                 for tc in tool_calls:
@@ -234,11 +246,13 @@ class ResearchAgent:
                     yield ToolResultEvent(tool_name=tool_name, result=result)
 
                     # 将工具结果加入消息历史
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result.content,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result.content,
+                        }
+                    )
 
                     # 更新工作记忆
                     if result.success:
@@ -258,10 +272,12 @@ class ResearchAgent:
 
             # 没有工具调用 → 最终回答
             final_content = response.get("content") or ""
-            messages.append({
-                "role": "assistant",
-                "content": final_content,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": final_content,
+                }
+            )
 
             # 保存对话历史
             conv.add("user", query)
@@ -326,21 +342,23 @@ class ResearchAgent:
             tool_calls = response.get("tool_calls")
 
             if tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": response.get("content"),
-                    "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["function"]["name"],
-                                "arguments": tc["function"]["arguments"],
-                            },
-                        }
-                        for tc in tool_calls
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response.get("content"),
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["function"]["name"],
+                                    "arguments": tc["function"]["arguments"],
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                )
 
                 for tc in tool_calls:
                     tool_name = tc["function"]["name"]
@@ -360,11 +378,13 @@ class ResearchAgent:
 
                     yield ToolResultEvent(tool_name=tool_name, result=result)
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result.content,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result.content,
+                        }
+                    )
 
                     if result.success:
                         working.set(
@@ -381,10 +401,12 @@ class ResearchAgent:
                 yield TokenEvent(token=char)
                 await asyncio.sleep(0)  # 让出控制权
 
-            messages.append({
-                "role": "assistant",
-                "content": final_content,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": final_content,
+                }
+            )
 
             conv.add("user", query)
             conv.add("assistant", final_content)
@@ -413,10 +435,14 @@ class ResearchAgent:
     ) -> list[dict]:
         """构建初始消息列表（system prompt + 历史 + 当前问题）。"""
         # 工具描述
-        tool_descriptions = "\n".join(
-            f"- **{name}**: {tool.description}"
-            for name, tool in self.tool_registry._tools.items()
-        ) if self.tool_registry else "（无可用工具）"
+        tool_descriptions = (
+            "\n".join(
+                f"- **{name}**: {tool.description}"
+                for name, tool in self.tool_registry._tools.items()
+            )
+            if self.tool_registry
+            else "（无可用工具）"
+        )
 
         # 上下文信息
         context_parts = []
@@ -450,7 +476,8 @@ class ResearchAgent:
                 content = msg.get("content", "")
                 # 简单提取页码引用
                 import re
-                pages = re.findall(r'页码(\d+)', content)
+
+                pages = re.findall(r"页码(\d+)", content)
                 for p in pages:
                     sources.append({"page": int(p), "type": "retrieved_chunk"})
         return sources

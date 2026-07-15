@@ -2,7 +2,6 @@
 
 import re
 
-
 # 参考文献段落头部关键词（短文本 + 关键词匹配）
 _REF_HEADER_PATTERNS = [
     r'^参考文献\s*$', r'^References?\s*$', r'^REFERENCES\s*$',

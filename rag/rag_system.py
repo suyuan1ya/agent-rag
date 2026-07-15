@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-"""RAG 检索系统核心模块，封装 Milvus 连接、Embedding、BM25、Reranker 和 LLM。"""
+"""RAG 检索系统核心模块，封装 ChromaDB 向量存储、Embedding、BM25、Reranker 和 LLM。"""
 
 import atexit
+import base64
 import gc
 import json
 import math
 import os
-import base64
 import re
 import sys
+
+# 修复 Windows GBK 终端下的 emoji 打印问题
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 import time
 import traceback
 from collections import Counter as _Counter
@@ -17,22 +23,19 @@ from collections import Counter as _Counter
 import numpy as np
 
 # 加载 .env 配置（必须在读取环境变量之前）
-from .utils.config import load_dotenv, configure_tesseract
+from .utils.config import configure_tesseract, load_dotenv
+
 load_dotenv()
 
-# Tesseract OCR 配置（必须在导入 UnstructuredLoader 之前完成）
+# Tesseract OCR 配置
 configure_tesseract()
 
-from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType, utility
-from pymilvus.exceptions import MilvusException
-from sentence_transformers import SentenceTransformer
-from langchain_unstructured import UnstructuredLoader
-from sentence_transformers import CrossEncoder
-from openai import OpenAI, APIError, AuthenticationError
+import chromadb
+from openai import APIError, AuthenticationError, OpenAI
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from .utils.dedup import _simhash, _hamming
-from .utils.filters import _is_reference_header, _is_new_section_header, _is_noise_block
-from .utils.coordinates import _get_element_y_range, _get_page_height
+from .utils.dedup import _hamming, _simhash
+from .utils.filters import _is_new_section_header, _is_noise_block, _is_reference_header
 
 
 def _llm_call_with_retry(client, model: str, messages: list[dict], temperature: float, max_retries: int = 3) -> str:
@@ -55,7 +58,7 @@ def _llm_call_with_retry(client, model: str, messages: list[dict], temperature: 
 
 
 class RAGSystem:
-    """RAG 检索系统，封装 Milvus 连接、Embedding、BM25、Reranker 和 LLM。
+    """RAG 检索系统，封装 ChromaDB 向量存储、Embedding、BM25、Reranker 和 LLM。
 
     所有状态以实例变量管理，避免全局变量。
     """
@@ -63,21 +66,17 @@ class RAGSystem:
     def __init__(
         self,
         pdf_path: str,
-        milvus_host: str | None = None,
-        milvus_port: str | None = None,
+        chroma_path: str | None = None,
         collection_name: str = "pdf_slices",
         embedding_dim: int = 768,
         bm25_cache_path: str | None = None,
         rrf_dense_weight: float = 0.6,
         rrf_sparse_weight: float = 0.4,
     ):
-        if milvus_host is None:
-            milvus_host = os.getenv("MILVUS_HOST", "localhost")
-        if milvus_port is None:
-            milvus_port = os.getenv("MILVUS_PORT", "19530")
+        if chroma_path is None:
+            chroma_path = os.getenv("CHROMA_PATH", "./chroma_data")
         self.pdf_path = pdf_path
-        self.milvus_host = milvus_host
-        self.milvus_port = milvus_port
+        self.chroma_path = chroma_path
         self.collection_name = collection_name
         self.embedding_dim = embedding_dim
         self.rrf_dense_weight = rrf_dense_weight
@@ -90,7 +89,7 @@ class RAGSystem:
             self.bm25_cache_path = bm25_cache_path
 
         # 实例变量
-        self.collection: Collection | None = None
+        self.collection = None  # chromadb Collection
         self.embed_model: SentenceTransformer | None = None
         self.reranker: CrossEncoder | None = None
 
@@ -129,24 +128,8 @@ class RAGSystem:
     # ==================== 清理 ====================
 
     def close(self) -> None:
-        """释放 Milvus 连接、模型和缓存，在退出时自动调用。
-
-        【修复17】同时释放 embedding 模型和 reranker，防止多次运行后内存泄漏。
-        """
-        # 释放 Milvus 资源
-        try:
-            if self.collection is not None:
-                try:
-                    self.collection.release()
-                except Exception:
-                    pass
-                self.collection = None
-        except Exception:
-            pass
-        try:
-            connections.disconnect("default")
-        except Exception:
-            pass
+        """释放模型和缓存，在退出时自动调用。"""
+        self.collection = None
 
         # 释放模型（GPU 显存 + CPU 内存）
         for attr, name in [("embed_model", "Embedding 模型"), ("reranker", "Reranker")]:
@@ -157,12 +140,10 @@ class RAGSystem:
                 except Exception:
                     pass
                 setattr(self, attr, None)
-                if hasattr(self, f"_{name}"):
-                    continue
 
         # 强制垃圾回收
         gc.collect()
-        if self._device == "cuda":
+        if hasattr(self, '_device') and self._device == "cuda":
             try:
                 import torch
                 torch.cuda.empty_cache()
@@ -233,7 +214,7 @@ class RAGSystem:
             with open(self.bm25_cache_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
         except OSError:
-            print(f"⚠️ 保存 BM25 缓存失败:")
+            print("⚠️ 保存 BM25 缓存失败:")
             traceback.print_exc()
 
     def _load_bm25_cache(self) -> bool:
@@ -255,60 +236,37 @@ class RAGSystem:
             ]
             return True
         except (OSError, json.JSONDecodeError, KeyError):
-            print(f"⚠️ BM25 缓存加载失败，将重建:")
+            print("⚠️ BM25 缓存加载失败，将重建:")
             traceback.print_exc()
             return False
 
-    # ==================== Milvus 连接 ====================
+    # ==================== ChromaDB 向量存储 ====================
 
-    def setup_milvus(self) -> None:
-        """连接 Milvus，创建/校验集合。"""
+    def setup_vector_store(self) -> None:
+        """初始化 ChromaDB 持久化客户端，获取或创建集合。"""
         try:
-            connections.connect(alias="default", host=self.milvus_host, port=self.milvus_port)
-        except MilvusException:
-            print(f"❌ 无法连接 Milvus ({self.milvus_host}:{self.milvus_port}):")
+            self._chroma_client = chromadb.PersistentClient(path=self.chroma_path)
+        except Exception:
+            print(f"❌ 无法初始化 ChromaDB (path={self.chroma_path}):")
             traceback.print_exc()
             sys.exit(1)
 
         try:
-            if utility.has_collection(self.collection_name):
-                self.collection = Collection(self.collection_name)
-                for field in self.collection.schema.fields:
-                    if field.name == "embedding":
-                        if field.params.get("dim") != self.embedding_dim:
-                            print(f"⚠️ 集合维度不匹配，删除重建...")
-                            self.collection.drop()
-                            self.collection = None
-                        break
-
-                if self.collection is not None:
-                    self.collection.load()
-                    print(f"✅ 已连接已有集合: {self.collection_name}（{self.collection.num_entities} 条数据）")
-                    # 【修复2】只从本地缓存加载 BM25，绝不从 Milvus 全量读取
-                    if not self._load_bm25_cache():
-                        print("⚠️ BM25 缓存缺失，将在入库时重建")
-                    return
-
-            # 新建集合
-            fields = [
-                FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.embedding_dim),
-                FieldSchema(name="page_content", dtype=DataType.VARCHAR, max_length=65535),
-                FieldSchema(name="page_number", dtype=DataType.INT64),
-                FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=512),
-            ]
-            schema = CollectionSchema(fields, description="PDF slices with embeddings")
-            self.collection = Collection(self.collection_name, schema, using="default")
-            index_params = {"metric_type": "COSINE", "index_type": "FLAT", "params": {}}
-            self.collection.create_index(field_name="embedding", index_params=index_params)
-            self.collection.load()
-            print(f"✅ 已创建新集合: {self.collection_name}")
-        except MilvusException:
-            print(f"❌ Milvus 操作失败:")
+            self.collection = self._chroma_client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+            count = self.collection.count()
+            if count > 0:
+                print(f"✅ 已连接已有集合: {self.collection_name}（{count} 条数据）")
+                if not self._load_bm25_cache():
+                    print("⚠️ BM25 缓存缺失，将在入库时重建")
+            else:
+                print(f"✅ 已创建新集合: {self.collection_name}（ChromaDB 持久化存储于 {self.chroma_path}）")
+        except Exception:
+            print("❌ ChromaDB 操作失败:")
             traceback.print_exc()
             sys.exit(1)
-
-    # 【修复2】删除 _rebuild_bm25_from_milvus —— BM25 仅从本地 JSON 加载，不从 Milvus 全量读取
 
     # ==================== 模型加载 ====================
 
@@ -331,18 +289,27 @@ class RAGSystem:
             print("🖥️  未安装 PyTorch，使用 CPU 运行")
 
         try:
+            # 设置 HF 镜像（国内网络兼容）
+            hf_mirror = os.getenv("HF_ENDPOINT", "")
+            if hf_mirror:
+                os.environ["HF_ENDPOINT"] = hf_mirror
+            # 模型已缓存则离线加载，避免网络超时导致后台任务失败
+            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+            cached = os.path.isdir(cache_dir) and any(
+                "bge-base-zh" in d for d in (os.listdir(cache_dir) if os.path.isdir(cache_dir) else [])
+            )
             self.embed_model = SentenceTransformer(
                 'BAAI/bge-base-zh-v1.5',
                 device=self._device,
+                local_files_only=cached,
             )
-            # 【修复15】GPU 上使用 FP16 量化，内存减半（~400MB → ~200MB）
             if self._device == "cuda":
                 self.embed_model.half()
                 print("🖥️  Embedding 模型已转为 FP16")
         except Exception:
-            print(f"❌ Embedding 模型加载失败:")
+            print("❌ Embedding 模型加载失败:")
             traceback.print_exc()
-            sys.exit(1)
+            raise RuntimeError("Embedding 模型加载失败，请检查网络或设置 HF_ENDPOINT 环境变量")
 
         if load_reranker:
             self._load_reranker()
@@ -360,41 +327,42 @@ class RAGSystem:
         """延迟加载 reranker，避免入库阶段占用额外内存。"""
         if self.reranker is not None:
             return
-        # 【兼容】用 CrossEncoder 替代 FlagReranker，避免 transformers v5 API 不兼容
+        # 模型已缓存则离线加载
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        cached = os.path.isdir(cache_dir) and any(
+            "bge-reranker" in d for d in (os.listdir(cache_dir) if os.path.isdir(cache_dir) else [])
+        )
         try:
             self.reranker = CrossEncoder(
                 'BAAI/bge-reranker-v2-m3',
                 device=self._device,
+                local_files_only=cached,
             )
             print("✅ Reranker 已加载")
         except Exception:
-            print(f"❌ Reranker 模型加载失败:")
+            print("❌ Reranker 模型加载失败:")
             traceback.print_exc()
-            sys.exit(1)
+            raise RuntimeError("Reranker 模型加载失败，请检查网络")
 
     # ==================== PDF 入库 ====================
 
     def _check_source_exists(self, source_file: str) -> bool:
-        """【修复1】检查 source_file 是否已入库，区分"不存在"和"查询错误"。"""
-        if self.collection is None or self.collection.num_entities == 0:
+        """检查 source_file 是否已入库，区分"不存在"和"查询错误"。"""
+        if self.collection is None or self.collection.count() == 0:
             return False
         try:
-            # 【修复19】Milvus 表达式将 \ 视为转义符，需转义 Windows 路径
-            escaped = source_file.replace('\\', '\\\\')
-            results = self.collection.query(
-                expr=f'source_file == "{escaped}"',
-                output_fields=["id"],
+            results = self.collection.get(
+                where={"source_file": source_file},
                 limit=1,
             )
-            return len(results) > 0
-        except MilvusException:
-            # Milvus 查询异常时打印堆栈，向上抛出而非静默跳过
-            print(f"❌ 检查 source_file 时 Milvus 查询异常:")
+            return len(results["ids"]) > 0
+        except Exception:
+            print("❌ 检查 source_file 时 ChromaDB 查询异常:")
             traceback.print_exc()
             raise
 
-    def ingest_pdf(self, pdf_path: str | None = None, enable_image_descriptions: bool = True) -> None:
-        """解析 PDF、清洗、分块、批量向量化并存入 Milvus。"""
+    def ingest_pdf(self, pdf_path: str | None = None, enable_image_descriptions: bool = False) -> None:
+        """解析 PDF、清洗、分块、批量向量化并存入 ChromaDB。"""
         if pdf_path is None:
             pdf_path = self.pdf_path
 
@@ -402,69 +370,55 @@ class RAGSystem:
             print(f"❌ PDF 文件不存在: {pdf_path}")
             sys.exit(1)
 
-        # 【修复1】按 source_file 判断，异常时抛出而非静默跳过
+        # 按 source_file 判断，异常时抛出而非静默跳过
         try:
             if self._check_source_exists(pdf_path):
-                print(f"⚠️ PDF 已入库（source_file 校验），跳过。如需重新入库请先手动删除。")
+                print("⚠️ PDF 已入库（source_file 校验），跳过。如需重新入库请先手动删除。")
                 return
-        except MilvusException:
+        except Exception:
             print("❌ 无法校验入库状态，终止入库以避免重复数据")
             sys.exit(1)
 
-        # 【修复6】本地解析：fast 策略直接从 PDF 提取文本，不触发 OCR
-        # 学术论文通常是数字 PDF（非扫描件），fast 速度快、内存低
+        # 使用 PyMuPDF 直接从 PDF 提取文本
+        import tempfile
+
+        import fitz
+
         try:
-            loader = UnstructuredLoader(
-                file_path=pdf_path,
-                strategy='fast',
-                partition_via_api=False,
-                coordinates=True,
-                languages=['chi_sim'],
-            )
+            pdf_doc = fitz.open(pdf_path)
         except Exception:
-            print(f"❌ PDF Loader 初始化失败:")
+            print("❌ PDF 打开失败:")
             traceback.print_exc()
             sys.exit(1)
 
-        # 【修复18】写入临时 JSONL 文件而非内存列表，避免大 PDF 撑爆 RAM
-        import tempfile
         tmp_fd, tmp_path = tempfile.mkstemp(suffix='.jsonl', prefix='rag_raw_', text=True)
-        page_header_texts: dict[int, list[str]] = {}
-        page_footer_texts: dict[int, list[str]] = {}
-        header_threshold_ratio = 0.08
-        footer_threshold_ratio = 0.08
-        doc_count = 0
         element_count = 0
 
         try:
             with os.fdopen(tmp_fd, 'w', encoding='utf-8') as tmp:
-                for doc in loader.lazy_load():
-                    doc_count += 1
-                    text = self._clean_text(doc.page_content)
-                    if not text:
-                        continue
-                    page_num = doc.metadata.get("page_number", 0)
-                    tmp.write(json.dumps({"t": text, "p": page_num}, ensure_ascii=False) + '\n')
-                    element_count += 1
+                for page_idx in range(len(pdf_doc)):
+                    page = pdf_doc[page_idx]
+                    blocks = page.get_text("blocks")
+                    for block in blocks:
+                        # block: (x0, y0, x1, y1, text, block_no, block_type)
+                        text = self._clean_text(block[4])
+                        if not text:
+                            continue
+                        page_num = page_idx + 1
+                        tmp.write(json.dumps({"t": text, "p": page_num}, ensure_ascii=False) + '\n')
+                        element_count += 1
 
-                    # 【修复10】用坐标判断页眉/页脚候选
-                    y_range = _get_element_y_range(doc)
-                    page_h = _get_page_height(doc)
-                    if y_range is not None and page_h is not None:
-                        top_y, bottom_y = y_range
-                        if top_y < page_h * header_threshold_ratio:
-                            page_header_texts.setdefault(page_num, []).append(text)
-                        if bottom_y > page_h * (1 - footer_threshold_ratio):
-                            page_footer_texts.setdefault(page_num, []).append(text)
-
-                    if doc_count % 50 == 0:
-                        print(f"  已解析 {doc_count} 个元素，当前有效切片 {element_count}...")
+                    if (page_idx + 1) % 10 == 0:
+                        print(f"  已解析 {page_idx + 1} 页，当前有效切片 {element_count}...")
         except Exception:
+            pdf_doc.close()
             os.unlink(tmp_path)
-            print(f"❌ PDF 解析失败:")
+            print("❌ PDF 解析失败:")
             traceback.print_exc()
-            print("   请确认 PDF 文件未损坏，或安装本地依赖: pip install 'unstructured[local-inference]'")
             sys.exit(1)
+        finally:
+            pdf_doc.close()
+
         print(f"🧹 清洗后剩余 {element_count} 个切片")
 
         if element_count == 0:
@@ -472,34 +426,18 @@ class RAGSystem:
             print("❌ 清洗后无有效文本")
             sys.exit(1)
 
-        # 【修复10】基于坐标识别页眉/页脚：出现在 >= 3 页的页眉/页脚区域的相同文本
-        def _collect_repeating(texts_by_page: dict[int, list[str]]) -> set[str]:
-            freq = _Counter()
-            for texts in texts_by_page.values():
-                freq.update(set(texts))  # 每页每文本只计一次
-            return {t for t, c in freq.items() if c >= 3}
-
-        header_texts = _collect_repeating(page_header_texts)
-        footer_texts = _collect_repeating(page_footer_texts)
-        header_footer = header_texts | footer_texts
-        del page_header_texts, page_footer_texts
-        print(f"🔍 坐标识别到 {len(header_texts)} 条页眉、{len(footer_texts)} 条页脚")
-
-        # 【修复18】从临时文件流式读取并过滤，不再持有全量 raw_slices 列表
+        # 从临时文件流式读取并过滤
         MIN_TEXT_LEN = 50
         filtered_slices: list[dict] = []
-        filtered_header = filtered_short = filtered_ref = filtered_noise = 0
+        filtered_short = filtered_ref = filtered_noise = 0
         in_reference_section = False
         try:
             with open(tmp_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     rec = json.loads(line)
                     text = rec["t"]
-                    if text in header_footer:
-                        filtered_header += 1
-                        continue
 
-                    # 【修复20】参考文献 / 实验数据过滤
+                    # 参考文献 / 实验数据过滤
                     if _is_reference_header(text):
                         in_reference_section = True
                         filtered_ref += 1
@@ -519,7 +457,7 @@ class RAGSystem:
                     filtered_slices.append({"text": text, "page_number": rec["p"]})
         finally:
             os.unlink(tmp_path)
-        print(f"🚮 过滤页眉/页脚 {filtered_header} 条，参考文献 {filtered_ref} 条，数据噪声 {filtered_noise} 条，短碎片 {filtered_short} 条")
+        print(f"🚮 过滤参考文献 {filtered_ref} 条，数据噪声 {filtered_noise} 条，短碎片 {filtered_short} 条")
 
         if not filtered_slices:
             print("⚠️ 文本过滤后无有效内容，仅尝试图片提取")
@@ -548,7 +486,7 @@ class RAGSystem:
         del filtered_slices
         gc.collect()
 
-        # 【修复3】批量编码，而非逐条 encode（_batch_encode 自动分批避免 OOM）
+        # 批量编码并存入 ChromaDB
         total_inserted = 0
         try:
             for i in range(0, len(chunks), self.BATCH_SIZE):
@@ -557,30 +495,25 @@ class RAGSystem:
 
                 embeddings = self._batch_encode(batch_texts)
 
-                entities = [
-                    {
-                        "embedding": emb,
-                        "page_content": batch[j]['text'],
-                        "page_number": batch[j]['page_number'],
-                        "source_file": pdf_path,
-                    }
-                    for j, emb in enumerate(embeddings)
+                ids = [f"chunk_{i + j}" for j in range(len(batch))]
+                metadatas = [
+                    {"page_number": batch[j]['page_number'], "source_file": pdf_path}
+                    for j in range(len(batch))
                 ]
-                self.collection.insert(entities)
-                total_inserted += len(entities)
-                print(f"  已插入 {len(entities)} 条，累计 {total_inserted} 条")
-        except MilvusException:
-            print(f"❌ 向量插入失败:")
+                self.collection.add(
+                    ids=ids,
+                    embeddings=embeddings,
+                    documents=batch_texts,
+                    metadatas=metadatas,
+                )
+                total_inserted += len(batch)
+                print(f"  已插入 {len(batch)} 条，累计 {total_inserted} 条")
+        except Exception:
+            print("❌ 向量插入失败:")
             traceback.print_exc()
             sys.exit(1)
 
         print(f"✅ 全部插入完成，共 {total_inserted} 条")
-        try:
-            self.collection.flush()
-            self.collection.load()
-        except MilvusException:
-            print(f"❌ Flush/Load 失败:")
-            traceback.print_exc()
 
     def _batch_encode(self, texts: list[str]) -> list[list[float]]:
         """批量文本向量化，内部自动分批避免 CUDA OOM。"""
@@ -684,14 +617,15 @@ class RAGSystem:
         try:
             doc = fitz.open(pdf_path)
         except Exception:
-            print(f"⚠️ PyMuPDF 无法打开 PDF，跳过图片提取")
+            print("⚠️ PyMuPDF 无法打开 PDF，跳过图片提取")
             traceback.print_exc()
             return []
 
         # 尝试加载 Pillow 用于图片缩放
         try:
-            from PIL import Image
             import io as _pillow_io
+
+            from PIL import Image
             _has_pillow = True
         except ImportError:
             _has_pillow = False
@@ -844,60 +778,61 @@ class RAGSystem:
 
         try:
             query_vec = self.embed_model.encode(self.QUERY_PREFIX + query_text).tolist()
-            search_params = {"metric_type": "COSINE", "params": {}}
-            candidates = self.collection.search(
-                data=[query_vec],
-                anns_field="embedding",
-                param=search_params,
-                limit=top_k * 5,
-                output_fields=["page_content", "page_number", "source_file"],
+            chroma_result = self.collection.query(
+                query_embeddings=[query_vec],
+                n_results=min(top_k * 5, self.collection.count()),
+                include=["documents", "metadatas", "distances"],
             )
-        except MilvusException:
-            print(f"❌ Milvus 向量搜索失败:")
+        except Exception:
+            print("❌ ChromaDB 向量搜索失败:")
             traceback.print_exc()
             return None
 
-        all_hits = []
-        for hits in candidates:
-            for hit in hits:
-                all_hits.append(hit)
+        # ChromaDB 返回格式: {'ids':[[]], 'documents':[[]], 'metadatas':[[]], 'distances':[[]]}
+        doc_texts = chroma_result.get("documents", [[]])[0]
+        metadatas = chroma_result.get("metadatas", [[]])[0]
+        distances = chroma_result.get("distances", [[]])[0]
 
-        if not all_hits:
+        if not doc_texts:
             return None
 
+        # ChromaDB cosine distance → similarity score
+        all_hits = [
+            (text, meta, 1.0 - dist)
+            for text, meta, dist in zip(doc_texts, metadatas, distances)
+        ]
+
         self._load_reranker()
-        pairs = [[query_text, hit.entity.get('page_content')] for hit in all_hits]
+        pairs = [[query_text, text] for text, _, _ in all_hits]
         logits = self.reranker.predict(pairs, show_progress_bar=False, convert_to_numpy=True)
-        # sigmoid 归一化到 [0, 1]，CrossEncoder 返回原始 logits
         scores = 1.0 / (1.0 + np.exp(-logits))
 
-        # 过滤低分结果 + 按分数降序排列
+        # 过滤低分 + 按分数降序排列
         scored = [(hit, s) for hit, s in zip(all_hits, scores) if s >= self.MIN_SCORE]
         if not scored:
             return None
         ranked = sorted(scored, key=lambda x: x[1], reverse=True)
 
-        # 【修复8】SimHash 去重，替换 Jaccard 字符重叠
-        final: list[tuple] = []
+        # SimHash 去重
+        final: list[dict] = []
         final_fingerprints: list[int] = []
-        for hit, score in ranked:
-            text = hit.entity.get('page_content')
+        for (text, meta, _dist), score in ranked:
             fp = _simhash(text)
             if any(_hamming(fp, existing) <= self.SIMHASH_THRESHOLD for existing in final_fingerprints):
                 continue
-            final.append((hit, score))
+            final.append({
+                "score": score,
+                "page": meta.get("page_number", 0),
+                "text": text,
+            })
             final_fingerprints.append(fp)
             if len(final) >= top_k:
                 break
 
-        # 【修复4】去重后为空则返回 None，不传给 LLM
         if not final:
             return None
 
-        return [
-            {"score": score, "page": hit.entity.get('page_number'), "text": hit.entity.get('page_content')}
-            for hit, score in final
-        ]
+        return final
 
     def hybrid_search(self, query: str, top_k: int = 3) -> list[dict] | None:
         """Dense + BM25 混合检索，加权 RRF 融合后 reranker 精排。
@@ -1004,11 +939,11 @@ class RAGSystem:
             traceback.print_exc()
             raise
         except APIError:
-            print(f"❌ 千问 API 调用失败:")
+            print("❌ 千问 API 调用失败:")
             traceback.print_exc()
             raise
         except Exception:
-            print(f"❌ LLM 调用未知错误:")
+            print("❌ LLM 调用未知错误:")
             traceback.print_exc()
             raise
 

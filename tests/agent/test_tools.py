@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from src.agent.tools.base import Tool, ToolResult, tool, get_openai_tool_schema
+from src.agent.tools.base import ToolResult, get_openai_tool_schema, tool
+from src.agent.tools.query_tools import create_query_tools
 from src.agent.tools.registry import ToolRegistry
 
 
@@ -63,6 +66,23 @@ class TestToolDecorator:
         assert result.success is False
         assert "ValueError" in result.error
         assert "boom" in result.error
+
+    def test_query_tool_awaits_async_llm_client(self):
+        create = AsyncMock(
+            return_value=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="改写后的查询"))]
+            )
+        )
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        rewrite_query = create_query_tools(client, "test-model")[1]
+
+        result = asyncio.run(rewrite_query.acall(original_query="原始查询"))
+
+        assert result.success is True
+        assert result.content == "改写后的查询"
+        create.assert_awaited_once()
 
 
 class TestToolSchema:

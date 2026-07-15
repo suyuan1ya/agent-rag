@@ -1,4 +1,4 @@
-"""测试 FastAPI 路由（使用 TestClient，不需要 Milvus）。"""
+"""测试 FastAPI 路由（使用 TestClient，不需要 ChromaDB）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
-from src.api.dependencies import set_agent, _agent
 
 
 @pytest.fixture
@@ -17,11 +16,17 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def reset_agent():
+def reset_agent(monkeypatch):
     import src.api.dependencies as dep
+
+    monkeypatch.setattr("src.api.routes.health.restore_agent", lambda _kb: None)
+    monkeypatch.setattr("src.api.routes.search.restore_agent", lambda _kb: None)
+    monkeypatch.setattr("src.api.routes.chat.restore_agent", lambda _kb: None)
+    dep.runtime_registry.clear()
     dep._agent = None
     dep._agent_pdf = ""
     yield
+    dep.runtime_registry.clear()
     dep._agent = None
     dep._agent_pdf = ""
 
@@ -37,8 +42,8 @@ class TestHealth:
     def test_health_response_schema(self, client):
         response = client.get("/api/v1/health")
         data = response.json()
-        assert data["version"] == "0.2.0"
-        assert data["milvus_connected"] is False
+        assert data["version"] == "0.3.0"
+        assert data["vector_store_connected"] is False
         assert data["model_loaded"] is False
 
     def test_metrics_endpoint(self, client):
@@ -48,32 +53,51 @@ class TestHealth:
 
 class TestSearch:
     def test_search_without_agent_returns_503(self, client):
-        response = client.post("/api/v1/search", json={
-            "query": "什么是深度学习",
-            "strategy": "hybrid",
-            "top_k": 5,
-        })
+        response = client.post(
+            "/api/v1/search",
+            json={
+                "query": "什么是深度学习",
+                "strategy": "hybrid",
+                "top_k": 5,
+            },
+        )
         assert response.status_code == 503
         assert "尚未就绪" in response.json()["detail"]
 
     def test_search_invalid_strategy(self, client):
-        response = client.post("/api/v1/search", json={
-            "query": "test",
-            "strategy": "invalid",
-            "top_k": 5,
-        })
+        response = client.post(
+            "/api/v1/search",
+            json={
+                "query": "test",
+                "strategy": "invalid",
+                "top_k": 5,
+            },
+        )
         assert response.status_code == 422
 
     def test_search_empty_query(self, client):
-        response = client.post("/api/v1/search", json={
-            "query": "",
-            "strategy": "hybrid",
-            "top_k": 5,
-        })
+        response = client.post(
+            "/api/v1/search",
+            json={
+                "query": "",
+                "strategy": "hybrid",
+                "top_k": 5,
+            },
+        )
         assert response.status_code == 422
 
 
 class TestDocs:
+    def test_web_app_exists(self, client):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "AgentRAG" in response.text
+
+    def test_web_assets_exist(self, client):
+        response = client.get("/static/app.js")
+        assert response.status_code == 200
+        assert "knowledge_base_id" in response.text
+
     def test_docs_endpoint_exists(self, client):
         response = client.get("/docs")
         assert response.status_code == 200
